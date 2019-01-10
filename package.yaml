@@ -40,6 +40,7 @@ executables:
     - containers
     - Turtles
     - terminal
+    - lens
 
 tests:
   Turtles-test:

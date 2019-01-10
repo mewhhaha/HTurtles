@@ -59,7 +59,7 @@ newWorld newSize newDeck players = World (Board newSize newPath newDeck) (cycle 
           startPosition = uncurry Placement (dup . fst $ newSize)
 
 moveTurtle :: Int -> Turtle -> World -> World
-moveTurtle steps turtle w = w & board . path .~ updatedPath
+moveTurtle steps turtle w = if destination == placement^.position then w else w & board . path .~ updatedPath
     where   currentPath = w ^. board . path
             (Just placement) = Map.lookup turtle currentPath
             destination = clamp (w^.board.size) (placement^.position + steps)

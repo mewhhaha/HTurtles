@@ -87,13 +87,13 @@ drawPlayer row column player = do
 isInCard :: (Int, Int) -> Maybe Int
 isInCard (row, column) = if row > 7 && row < 13 && column < 36 then Just (column `div` 7) else Nothing
 
-draw :: World -> TerminalT IO ()
-draw world = do
+drawMainScene :: World -> TerminalT IO ()
+drawMainScene world = do
     hideCursor
     clearScreen
     drawBoard 5 0 (world^.board)
     drawPlayer 7 0 (currentPlayer world)
     drawCards 8 0 (currentPlayer world ^. cards)
     setCursorPosition (14, 0)
-    putString $ show $ head $ world^.turns
+    putString $ show $ world^.board.discarded
     --showCursor

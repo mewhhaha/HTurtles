@@ -24,6 +24,12 @@ dependencies:
 
 library:
   source-dirs: src
+  dependencies:
+  - random
+  - terminal
+  - lens
+  - containers
+  - split
 
 executables:
   Turtles-exe:
@@ -41,6 +47,8 @@ executables:
     - Turtles
     - terminal
     - lens
+    - transformers
+    
 
 tests:
   Turtles-test:

@@ -1,143 +1,111 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TemplateHaskell #-}
+
 
 module Main where
 
-import Prelude hiding (putChar)
+
 import Lib
+import Draw
+import Control.Lens
+import Model
 import qualified Data.Map as Map
 import Data.Maybe
 import Data.List
 import Data.Function
 import System.Terminal
 import Control.Monad.Terminal
-import Control.Lens
+import Control.Monad.Trans.Class
 
-type Turtle = BasicColor
-data Card = Move Int Turtle | Any Int | Last Int
-    deriving Show
-type Deck = [Card]
-data Placement = Placement {
-    _sorting :: Int,
-    _position :: Int
-} deriving Show
-type Path = Map.Map Turtle Placement
-data Player = Player {
-    _number :: Int,
-    _color :: Turtle,
-    _cards :: [Card] 
-} deriving Show
-type Turns = [Player]
-data Board = Board {
-    _size :: (Int, Int),
-    _path :: Path,
-    _deck :: Deck
-} deriving Show
-
-data World = World {
-    _board :: Board,
-    _turns :: Turns
-} deriving Show
-
-makeLenses ''World
-makeLenses ''Board
-makeLenses ''Player
-makeLenses ''Placement
 
 -- create deck
 
-nextTurn :: World -> World
-nextTurn = over turns tail
+reshuffle :: World -> TerminalT IO World
+reshuffle world = do
+        shuffled <- lift $ shuffle (world^.board.discarded)
+        let emptyDiscarded = world & board.discarded .~ []
+        return $ emptyDiscarded & board.deck .~ shuffled
 
-drawCard :: World -> (Maybe Card, World)
-drawCard w = (listToMaybe card, w & board . deck .~ deck')
-    where (card, deck') = splitAt 1 (w^.board.deck)
+nextTurn :: Player -> World -> World
+nextTurn player world = over turns (cycle . take (world^.players). (++ [player]) . tail) world
 
-newWorld :: (Int, Int) -> Deck -> [Player] -> World
-newWorld newSize newDeck players = World (Board newSize newPath newDeck) (cycle players)
-    where newPath = foldr (\player -> Map.insert (player^.color) startPosition) Map.empty players
-          startPosition = uncurry Placement (dup . fst $ newSize)
+topDeck :: World -> TerminalT IO (Card, World)
+topDeck world = case listToMaybe card of
+                Just card -> return (card, world & board . deck .~ deck')
+                Nothing -> do 
+                    world' <- reshuffle world
+                    topDeck world'
+    where (card, deck') = splitAt 1 (world^.board.deck)    
 
-moveTurtle :: Int -> Turtle -> World -> World
-moveTurtle steps turtle w = if destination == placement^.position then w else w & board . path .~ updatedPath
+chooseCard :: Int -> Player -> (Card, Player)
+chooseCard i player = (card, over cards (filter (/= card)) player)
+    where card = (player^.cards) !! i
+
+discardCard :: Card -> World -> World
+discardCard c w = over (board . discarded) (c:) w
+
+addCard :: Card -> Player -> Player
+addCard c p = over cards (c:) p
+
+moveTurtle :: Int -> BasicColor -> World -> World
+moveTurtle steps color w = if destination == turtle^.position then w else w & board . path .~ updatedPath
     where   currentPath = w ^. board . path
-            (Just placement) = Map.lookup turtle currentPath
-            destination = clamp (w^.board.size) (placement^.position + steps)
-            turtlesAtDestination = Map.size $ Map.filterWithKey (\t p -> t /= turtle && p^.position == destination) currentPath
-            turtlesCarried = Map.filter (\p -> p^.position == placement^.position && p^.sorting > placement^.sorting) currentPath 
+            (Just turtle) = Map.lookup color currentPath
+            destination = clamp (w^.board.size) (turtle^.position + steps)
+            carriedBy = flip all [(==) `on` (^.position), (<) `on` (^.sorting)] . (turtle &:)
+            atDestination = (\c t -> color /= c && destination == t^.position)
+            heightAtDestination = Map.size $ Map.filterWithKey atDestination currentPath
+            turtlesCarried = Map.filter carriedBy currentPath 
             movedTurtles = 
-                Map.insert turtle (Placement turtlesAtDestination destination) 
-                $ Map.map (\p -> Placement (p^.sorting + turtlesAtDestination - placement^.sorting) destination) turtlesCarried
+                Map.insert color (Turtle heightAtDestination destination) 
+                $ Map.map (\p -> Turtle (p^.sorting + heightAtDestination - turtle^.sorting) destination) turtlesCarried
             updatedPath = Map.union movedTurtles currentPath
 
 playCard :: Card -> World -> TerminalT IO World
-playCard (Move steps turtle) w = return $ moveTurtle steps turtle w
+playCard (Move steps color) w = return $ moveTurtle steps color w
 playCard (Last _) w = return w
-playCard (Any _) w = return w
+playCard (Any _) w = return w 
 
-drawBoard :: Board -> TerminalT IO ()
-drawBoard board = do
-    let (start, end) = board^.size
-        sortedByPosition = sortBy (compare `on` (_position . snd)) (Map.toList (board^.path))
-        groupedByPosition = groupBy ((==) `on` (_position . snd)) sortedByPosition
-        groupedAndSorted = map (map (over _2 _position) . sortBy (compare `on` (_sorting . snd))) groupedByPosition
-    setCursorPosition (5, 0)
-    setAnnotation (background $ dull Green)
-    mapM_ (const (putChar '#')) [start..end]
-    flip mapM_ groupedAndSorted $ \xs -> do
-        setCursorPosition (5, (snd . head $ xs))
-        drawStack (map fst xs)
-    setCursorPosition (6, 0)
-    resetAnnotations
-    putString $ show (board^.path)
-
-drawStack :: [Turtle] -> TerminalT IO ()
-drawStack turtles = 
-    flip mapM_ turtles $ \t -> do
-        drawTurtle t
-        moveCursorLeft 1 
-        moveCursorUp 1
-
-drawTurtle :: Turtle -> TerminalT IO ()
-drawTurtle turtle = do
-    setAnnotation (background $ dull turtle) 
-    putChar '@' 
+checkWinner :: World -> Maybe Player
+checkWinner world = do
+    winner <- maybeWinner
+    listToMaybe $ filter (\p -> p^.color == winner) allPlayers
+ where end = snd $ world^.board.size
+       allPlayers = take (world^.players) (world^.turns)
+       turtleSorting = _sorting . snd
+       turtlesOnEnd = Map.toList $ Map.filter ((==) end . (^.position)) (world^.board.path)
+       maybeWinner = listToMaybe $ map fst $ sortBy (compare `on` turtleSorting) turtlesOnEnd
 
 loop :: World -> TerminalT IO ()
 loop world = do
     draw world
     event <- waitEvent
-    world' <-
+    updatedWorld <-
             case event of
-                KeyEvent e _ -> case e of 
-                    CharKey 'r' -> playCard (Move 1 Red) world
-                    CharKey 'b' -> playCard (Move 1 Blue) world
-                    CharKey 'g' -> playCard (Move 1 Green) world
-                    CharKey 'R' -> playCard (Move (-1) Red) world
-                    CharKey 'B' -> playCard (Move (-1) Blue) world
-                    CharKey 'G' -> playCard (Move (-1) Green) world
+                MouseEvent e -> case e of 
+                    MouseButtonClicked cursor _ -> do
+                           case isInCard cursor of
+                             Nothing -> return world
+                             Just i -> do
+                                let (chosenCard, player') = chooseCard i (currentPlayer world)
+                                (topCard, world') <- playCard chosenCard world >>= topDeck
+                                return $ nextTurn (addCard topCard player') $ discardCard chosenCard world'
                     _ -> return world
-                _ -> return world    
-    if quit event then resetAnnotations else loop world'
-
-
+                _ -> return world
+    if quit event then resetAnnotations else loop updatedWorld
 
 quit :: Event -> Bool
-quit = \case 
-    InterruptEvent -> True
-    _ -> False        
-
-draw :: World -> TerminalT IO ()
-draw world = do
-    clearScreen
-    drawBoard (world^.board)
+quit InterruptEvent = True
+quit _ = False
 
 main :: IO ()
 main = do
-    let world = newWorld (0, 10) [] [Player 0 Red [], Player 1 Blue [], Player 2 Green []]
+    startDeck <- shuffle defaultDeck
+    startColors <- shuffle turtleColors
+    let world = newWorld (0, 10) startDeck startColors 3
     withTerminal $ \terminal -> 
         runTerminalT (loop world) terminal
-    
 
+
+        
 
 

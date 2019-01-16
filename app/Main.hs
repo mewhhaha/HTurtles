@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ExistentialQuantification #-}
 
 
 module Main where
@@ -19,13 +20,12 @@ import Control.Monad.Trans.Class
 data Action = PlayCard Int | DefineCard Int | NoAction
     deriving Show
 
-data Scene = Scene {
-    input :: Event -> World -> Action,
-    change :: Action -> World -> Maybe Scene,
-    update :: Action -> World -> IO World,
-    draw :: World -> TerminalT IO ()
+data Scene a = forall b. Scene {
+    draw :: World -> TerminalT IO (),
+    input :: Event -> World -> a,
+    change ::  a -> World -> Maybe (Scene b),
+    update :: a -> World -> IO World
 }
-
 
 reshuffle :: World -> IO World
 reshuffle world = do
@@ -82,7 +82,7 @@ checkWinner world = do
        turtlesOnEnd = Map.toList $ Map.filter ((==) end . (^.position)) (world^.board.path)
        maybeWinner = listToMaybe $ map fst $ sortBy (compare `on` turtleElevation) turtlesOnEnd
 
-pickColorScene :: Int -> Scene
+pickColorScene :: Int -> Scene Action
 pickColorScene i = Scene {
     input = inputPickColorScene,
     draw = drawPickColorScene i,
@@ -115,15 +115,15 @@ turtlesInLastPlace world = Map.keys $ Map.filter ((== lastPosition) . _position)
     where currentPath = world^.board.path
           lastPosition = _position $ head $ sortBy (compare `on` _position) $ Map.elems currentPath
 
-mainScene :: Scene
+mainScene :: Scene Action
 mainScene = Scene {
     input  = inputMainScene,
     draw   = drawMainScene,
-    update = updateMainScene,
+    update = updateMainScene, 
     change = changeMainScene
 }
 
-changeMainScene :: Action -> World -> Maybe Scene
+changeMainScene :: Action -> World -> Maybe (Scene Action)
 changeMainScene (DefineCard i) _ = Just (pickColorScene i)
 changeMainScene _ _ = Nothing
 
@@ -166,15 +166,19 @@ quit :: Event -> Bool
 quit InterruptEvent = True
 quit _ = False
 
-loop :: Scene -> World -> TerminalT IO ()
-loop scene world = do
-    draw scene world
+loop :: Scene a -> World -> TerminalT IO ()
+loop scene@(Scene draw input change update) world = do
+    draw world
     flush
     event <- waitEvent
-    let action = input scene event world
-        changedScene = change scene action world
-    world' <- lift $ update scene action world
-    if quit event then resetAnnotations else loop (maybe scene id changedScene) world'
+    let action = input event world
+        changedScene = change action world
+    world' <- lift $ update action world
+    if quit event 
+        then resetAnnotations 
+        else case changedScene of
+                    Nothing -> loop scene world'
+                    Just scene' -> loop scene' world'
 
 main :: IO ()
 main = do

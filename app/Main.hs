@@ -17,14 +17,15 @@ import Control.Monad.Terminal
 import Control.Monad.Trans.Class
 
 data Action = PlayCard Int | DefineCard Int | NoAction
+    deriving Show
 
 data Scene = Scene {
-    _input :: Event -> World -> Action,
-    _change :: Action -> World -> Scene,
-    _update :: Action -> World -> IO World,
-    _draw :: World -> TerminalT IO ()
+    input :: Event -> World -> Action,
+    change :: Action -> World -> Maybe Scene,
+    update :: Action -> World -> IO World,
+    draw :: World -> TerminalT IO ()
 }
--- create deck
+
 
 reshuffle :: World -> IO World
 reshuffle world = do
@@ -58,17 +59,17 @@ moveTurtle steps color w = if destination == turtle^.position then w else w & bo
     where   currentPath = w ^. board . path
             (Just turtle) = Map.lookup color currentPath
             destination = clamp (w^.board.size) (turtle^.position + steps)
-            carriedBy = flip all [(==) `on` (^.position), (<) `on` (^.sorting)] . (turtle &:)
+            carriedBy = flip all [(==) `on` (^.position), (<) `on` (^.elevation)] . (turtle &:)
             atDestination c t = color /= c && destination == t^.position
             heightAtDestination = Map.size $ Map.filterWithKey atDestination currentPath
-            turtlesCarried = Map.filter carriedBy currentPath 
+            turtlesCarried = Map.filter carriedBy currentPath
             movedTurtles = 
                 Map.insert color (Turtle heightAtDestination destination) 
-                $ Map.map (\p -> Turtle (p^.sorting + heightAtDestination - turtle^.sorting) destination) turtlesCarried
+                $ Map.map (\p -> Turtle (p^.elevation + heightAtDestination - turtle^.elevation) destination) turtlesCarried
             updatedPath = Map.union movedTurtles currentPath
 
 playCard :: Card -> World -> World
-playCard (Move steps color) w = moveTurtle steps color w
+playCard (Move direction steps color) w = moveTurtle (fromEnum steps * fromEnum direction) color w
 playCard _ _ = undefined
 
 checkWinner :: World -> Maybe Player
@@ -77,44 +78,68 @@ checkWinner world = do
     listToMaybe $ filter (\p -> p^.color == winner) allPlayers
  where end = snd $ world^.board.size
        allPlayers = take (world^.players) (world^.turns)
-       turtleSorting = _sorting . snd
+       turtleElevation = (^.elevation) . snd
        turtlesOnEnd = Map.toList $ Map.filter ((==) end . (^.position)) (world^.board.path)
-       maybeWinner = listToMaybe $ map fst $ sortBy (compare `on` turtleSorting) turtlesOnEnd
+       maybeWinner = listToMaybe $ map fst $ sortBy (compare `on` turtleElevation) turtlesOnEnd
 
-loop :: Scene -> World -> TerminalT IO ()
-loop scene world = do
-    _draw scene world
-    event <- waitEvent
-    let action = _input scene event world
-        scene' = _change scene action world
-    world' <- lift $ _update scene action world
-    if quit event then resetAnnotations else loop scene' world'
+pickColorScene :: Int -> Scene
+pickColorScene i = Scene {
+    input = inputPickColorScene,
+    draw = drawPickColorScene i,
+    update = updatePickColorScene,
+    change = changePickColorScene    
+}
 
+inputPickColorScene _ _ = NoAction
+changePickColorScene _ _ = Nothing
+updatePickColorScene _ = return . id
 
-colorPickerScene :: Int -> Scene
-colorPickerScene = undefined
+drawPickColorScene :: Int ->  World -> TerminalT IO ()
+drawPickColorScene i world = do
+    clearScreen
+    drawSquare 0 10 (11, 5) Black
+    drawBoard 5 11 (world^.board)
+    drawSquare 7 0 (45, 5) Black
+    setCursorPosition (7, 18) >> putString "PICK A COLOR"
+    let (card, _) = chooseCard i (currentPlayer world)
+        colors = case card of
+            (Last _) -> turtlesInLastPlace world
+            (Any _ _) -> defaultTurtleColors
+            _         -> undefined
+    drawCard 8 1 (cardWidth, cardHeight) $ card
+    mapM_ ((>> putString ">") . setCursorPosition) (zip [8..12] (repeat 9))
+    drawCards 8 11 (map Blank colors)
+
+turtlesInLastPlace :: World -> [BasicColor]
+turtlesInLastPlace world = Map.keys $ Map.filter ((== lastPosition) . _position) currentPath
+    where currentPath = world^.board.path
+          lastPosition = _position $ head $ sortBy (compare `on` _position) $ Map.elems currentPath
 
 mainScene :: Scene
 mainScene = Scene {
-    _input = inputMainScene,
-    _draw = drawMainScene,
-    _update = updateMainScene,
-    _change = changeMainScene
+    input  = inputMainScene,
+    draw   = drawMainScene,
+    update = updateMainScene,
+    change = changeMainScene
 }
 
-changeMainScene :: Action -> World -> Scene
-changeMainScene (DefineCard i) _ = colorPickerScene i 
-changeMainScene _ _ = mainScene
+changeMainScene :: Action -> World -> Maybe Scene
+changeMainScene (DefineCard i) _ = Just (pickColorScene i)
+changeMainScene _ _ = Nothing
 
 inputMainScene :: Event -> World -> Action
 inputMainScene event world = do
     case event of
         MouseEvent e -> case e of 
             MouseButtonClicked cursor _ -> do
-                   case isInCard cursor of
-                     Nothing -> NoAction
-                     Just i -> case fst $ chooseCard i (currentPlayer world) of
-                                    (Move _ _) -> PlayCard i
+                    let clickCard = listToMaybe 
+                                    $ catMaybes 
+                                    $ zipWith (\i rc -> if isInCard cursor rc then Just i else Nothing) 
+                                    [0..4] (zip (repeat 8) [0,7..])
+                    case clickCard of
+                        Nothing -> NoAction
+                        Just i -> case fst $ chooseCard i (currentPlayer world) of
+                                    (Move _ _ _) -> PlayCard i
                                     _          -> DefineCard i
             _ -> NoAction
         _ -> NoAction                     
@@ -128,15 +153,33 @@ updateMainScene action world = do
             return $ nextTurn (addCard topCard player') $ discardCard chosenCard world'
         _ -> return world
 
+drawMainScene :: World -> TerminalT IO ()
+drawMainScene world = do
+    hideCursor
+    clearScreen
+    drawSquare 0 10 (11, 5) Black
+    drawBoard 5 11 (world^.board)
+    drawPlayer 7 0 (currentPlayer world)
+    drawCards 8 0 (currentPlayer world ^. cards)
+
 quit :: Event -> Bool
 quit InterruptEvent = True
 quit _ = False
 
+loop :: Scene -> World -> TerminalT IO ()
+loop scene world = do
+    draw scene world
+    flush
+    event <- waitEvent
+    let action = input scene event world
+        changedScene = change scene action world
+    world' <- lift $ update scene action world
+    if quit event then resetAnnotations else loop (maybe scene id changedScene) world'
+
 main :: IO ()
 main = do
-    startDeck <- shuffle defaultDeck
-    startColors <- shuffle turtleColors
-    let world = newWorld (0, 10) startDeck startColors 3
+    let nPlayers = 3  
+    world <- newDefaultWorld nPlayers
     withTerminal $ \terminal -> 
         runTerminalT (loop mainScene world) terminal
 

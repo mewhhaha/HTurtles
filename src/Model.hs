@@ -3,17 +3,33 @@
 module Model where
 
 import Control.Lens
-import Control.Monad.Terminal
+import Control.Monad.Terminal hiding (Direction)
 import qualified Data.Map as Map
 import Data.List.Split
 import Lib
 import Data.List
-    
-data Card = Move Int BasicColor | Any Int | Last Int
+
+data Steps = Zero | One | Two
+    deriving (Eq, Show, Enum)
+
+data Direction = Forward | Backward
+    deriving (Eq)
+
+instance Enum Direction where
+    fromEnum Forward = 1
+    fromEnum Backward = -1
+    toEnum 1 = Forward
+    toEnum (-1) = Backward
+
+instance Show Direction where
+    show Forward = "+"
+    show Backward = "-"
+
+data Card = Move Direction Steps BasicColor | Any Direction Steps | Last Steps | Blank BasicColor
     deriving (Eq, Show)
 type Deck = [Card]
 data Turtle = Turtle {
-    _sorting :: Int,
+    _elevation :: Int, -- Confusing name, please change to something else
     _position :: Int
     } deriving Show
 type Path = Map.Map BasicColor Turtle
@@ -44,21 +60,29 @@ makeLenses ''Turtle
 currentPlayer :: World -> Player
 currentPlayer = head . (^.turns)
 
-turtleColors :: [BasicColor]
-turtleColors = [Black, Red, Green, Yellow, Blue, Magenta, Cyan]         
+defaultTurtleColors :: [BasicColor]
+defaultTurtleColors = [Red, Green, Blue, Magenta, Cyan]         
 
 defaultDeck :: Deck
-defaultDeck = concatMap colorCards turtleColors
+defaultDeck = concatMap colorCards defaultTurtleColors
               ++ anyCards 
               ++ lastCards
-    where colorCards c = [Move 2 c] ++ replicate 5 (Move 1 c) ++ replicate 2 (Move (-1) c)
-          anyCards = replicate 5 (Any 1) ++ replicate 2 (Any (-1))
-          lastCards = replicate 3 (Last 1) ++ replicate 2 (Last 2)
+    where colorCards c = [Move Forward Two c] ++ replicate 5 (Move Forward One c) ++ replicate 2 (Move Backward One c)
+          anyCards = replicate 5 (Any Forward One) ++ replicate 2 (Any Backward One)
+          lastCards = replicate 3 (Last One) ++ replicate 2 (Last Two)
 
-newWorld :: (Int, Int) -> Deck -> [BasicColor] -> Int -> World
-newWorld newSize newDeck newTurtles nPlayers = World nPlayers (Board newSize newPath newDeck []) (cycle players)
-    where startPosition = uncurry Turtle (dup . fst $ newSize)
-          startHands = chunksOf 5 newDeck
-          newPath = foldr (flip Map.insert startPosition) Map.empty newTurtles
-          players = zipWith newPlayer [0..] $ take nPlayers newTurtles
-          newPlayer i c = Player i c (startHands !! i)
+defaultBoardSize = (0, 10)
+defaultHandSize = 5
+
+newDefaultWorld :: Int -> IO World
+newDefaultWorld nPlayers = do
+        shuffledDeck <- shuffle defaultDeck
+        playerColors <- take nPlayers <$> shuffle defaultTurtleColors
+        
+        let (startCards, newDeck) = splitAt (nPlayers * 5) shuffledDeck
+            startPosition = uncurry Turtle (dup . fst $ defaultBoardSize)
+            
+            newPlayers = zipWith3 Player [0..nPlayers] playerColors (chunksOf defaultHandSize startCards)
+            newPath = foldr (flip Map.insert startPosition) Map.empty defaultTurtleColors
+
+        return $ World nPlayers (Board defaultBoardSize newPath newDeck []) (cycle newPlayers)

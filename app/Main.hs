@@ -16,6 +16,7 @@ import Data.Function
 import System.Terminal
 import Control.Monad.Terminal
 import Control.Monad.Trans.Class
+import Data.Char
 
 data MainAction = PlayCard Int | DefineCard [BasicColor] Int | NoAction
     deriving Show
@@ -94,25 +95,31 @@ pickColorScene :: [BasicColor] -> Int -> Scene
 pickColorScene colors i = Scene {
     input = inputPickColorScene colors,
     draw = drawPickColorScene i,
-    update = updatePickColorScene,
+    update = updatePickColorScene i,
     change = changePickColorScene    
 }
 
+inputPickColorScene :: [BasicColor] -> Event -> p -> Maybe PickColorAction
 inputPickColorScene colors event world = 
     case event of
         KeyEvent e _ -> case e of 
-            CharKey '1' -> color 0
-            CharKey '2' -> color 1
-            CharKey '3' -> color 2
-            CharKey '4' -> color 3
-            CharKey '5' -> color 4
-            CharKey '6' -> color 5
+            CharKey c -> if isDigit c then color (digitToInt c) else Nothing
             _ -> Nothing
         _ -> Nothing     
     where color i = PickColor <$> (listToMaybe $ fst $ splitAt i colors)
 
-changePickColorScene action _ = Nothing
-updatePickColorScene _ = return . id
+changePickColorScene :: p -> p1 -> Maybe Scene
+changePickColorScene _ _ = Just mainScene
+
+updatePickColorScene :: Int -> PickColorAction -> World -> IO World
+updatePickColorScene i (PickColor color) world = do
+    let (chosenCard, player) = chooseCard i (currentPlayer world)
+        definedCard = case chosenCard of
+                    (Last steps) -> Move Forward steps color
+                    (Any direction steps) -> Move direction steps color
+                    _ -> undefined
+    (topCard, world') <- topDeck $ playCard definedCard world
+    return $ nextTurn (addCard topCard player) $ discardCard definedCard world'
 
 drawPickColorScene :: Int ->  World -> TerminalT IO ()
 drawPickColorScene i world = do
@@ -129,8 +136,6 @@ drawPickColorScene i world = do
     drawCard 9 1 (cardWidth, cardHeight) $ card
     mapM_ ((>> putString ">") . setCursorPosition) (zip [9..13] (repeat 9))
     drawCards 9 11 (map Blank colors)
-
-
 
 mainScene :: Scene
 mainScene = Scene {
@@ -150,7 +155,7 @@ inputMainScene :: Event -> World -> Maybe MainAction
 inputMainScene event world = 
     case event of
         KeyEvent e _ -> case e of 
-            CharKey '1' -> play 0
+            CharKey c -> play 0
             CharKey '2' -> play 1
             CharKey '3' -> play 2
             CharKey '4' -> play 3
@@ -210,8 +215,3 @@ main = do
     world <- newDefaultWorld nPlayers
     withTerminal $ \terminal -> 
         runTerminalT (start mainScene world) terminal
-
-
-        
-
-

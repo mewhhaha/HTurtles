@@ -91,6 +91,14 @@ turtlesInLastPlace world = Map.keys $ Map.filter ((== lastPosition) . _position)
     where   currentPath = world^.board.path
             lastPosition = _position $ head $ sortBy (compare `on` _position) $ Map.elems currentPath
 
+winnerScene :: Player -> Scene
+winnerScene player = Scene {
+    input = \_ _ -> Nothing,
+    draw = \_ -> clearScreen >> putString (show player),
+    update = \_ -> return . id,
+    change = \_ _ -> Nothing
+}
+
 pickColorScene :: [BasicColor] -> Int -> Scene
 pickColorScene colors i = Scene {
     input = inputPickColorScene colors,
@@ -155,7 +163,7 @@ inputMainScene :: Event -> World -> Maybe MainAction
 inputMainScene event world = 
     case event of
         KeyEvent e _ -> case e of 
-            CharKey c -> play 0
+            CharKey '1' -> play 0
             CharKey '2' -> play 1
             CharKey '3' -> play 2
             CharKey '4' -> play 3

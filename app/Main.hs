@@ -17,13 +17,16 @@ import System.Terminal
 import Control.Monad.Terminal
 import Control.Monad.Trans.Class
 
-data Action = PlayCard Int | DefineCard Int | NoAction
+data MainAction = PlayCard Int | DefineCard [BasicColor] Int | NoAction
     deriving Show
 
-data Scene a = forall b. Scene {
+data PickColorAction = PickColor BasicColor
+    deriving Show
+
+data Scene = forall a. Scene {
     draw :: World -> TerminalT IO (),
-    input :: Event -> World -> a,
-    change ::  a -> World -> Maybe (Scene b),
+    input :: Event -> World -> Maybe a,
+    change ::  a -> World -> Maybe Scene,
     update :: a -> World -> IO World
 }
 
@@ -82,40 +85,54 @@ checkWinner world = do
        turtlesOnEnd = Map.toList $ Map.filter ((==) end . (^.position)) (world^.board.path)
        maybeWinner = listToMaybe $ map fst $ sortBy (compare `on` turtleElevation) turtlesOnEnd
 
-pickColorScene :: Int -> Scene Action
-pickColorScene i = Scene {
-    input = inputPickColorScene,
+turtlesInLastPlace :: World -> [BasicColor]
+turtlesInLastPlace world = Map.keys $ Map.filter ((== lastPosition) . _position) currentPath
+    where   currentPath = world^.board.path
+            lastPosition = _position $ head $ sortBy (compare `on` _position) $ Map.elems currentPath
+
+pickColorScene :: [BasicColor] -> Int -> Scene
+pickColorScene colors i = Scene {
+    input = inputPickColorScene colors,
     draw = drawPickColorScene i,
     update = updatePickColorScene,
     change = changePickColorScene    
 }
 
-inputPickColorScene _ _ = NoAction
-changePickColorScene _ _ = Nothing
+inputPickColorScene colors event world = 
+    case event of
+        KeyEvent e _ -> case e of 
+            CharKey '1' -> color 0
+            CharKey '2' -> color 1
+            CharKey '3' -> color 2
+            CharKey '4' -> color 3
+            CharKey '5' -> color 4
+            CharKey '6' -> color 5
+            _ -> Nothing
+        _ -> Nothing     
+    where color i = PickColor <$> (listToMaybe $ fst $ splitAt i colors)
+
+changePickColorScene action _ = Nothing
 updatePickColorScene _ = return . id
 
 drawPickColorScene :: Int ->  World -> TerminalT IO ()
 drawPickColorScene i world = do
     clearScreen
-    drawSquare 0 10 (11, 5) Black
-    drawBoard 5 11 (world^.board)
-    drawSquare 7 0 (45, 5) Black
-    setCursorPosition (7, 18) >> putString "PICK A COLOR"
+    drawSquare 0 0 (11, 6) Black
+    drawBoard 6 1 (world^.board)
+    drawSquare 8 0 (52, 5) Black
+    setCursorPosition (8, 20) >> putString "PICK A COLOR"
     let (card, _) = chooseCard i (currentPlayer world)
         colors = case card of
-            (Last _) -> turtlesInLastPlace world
+            (Last _)  -> turtlesInLastPlace world
             (Any _ _) -> defaultTurtleColors
             _         -> undefined
-    drawCard 8 1 (cardWidth, cardHeight) $ card
-    mapM_ ((>> putString ">") . setCursorPosition) (zip [8..12] (repeat 9))
-    drawCards 8 11 (map Blank colors)
+    drawCard 9 1 (cardWidth, cardHeight) $ card
+    mapM_ ((>> putString ">") . setCursorPosition) (zip [9..13] (repeat 9))
+    drawCards 9 11 (map Blank colors)
 
-turtlesInLastPlace :: World -> [BasicColor]
-turtlesInLastPlace world = Map.keys $ Map.filter ((== lastPosition) . _position) currentPath
-    where currentPath = world^.board.path
-          lastPosition = _position $ head $ sortBy (compare `on` _position) $ Map.elems currentPath
 
-mainScene :: Scene Action
+
+mainScene :: Scene
 mainScene = Scene {
     input  = inputMainScene,
     draw   = drawMainScene,
@@ -123,28 +140,29 @@ mainScene = Scene {
     change = changeMainScene
 }
 
-changeMainScene :: Action -> World -> Maybe (Scene Action)
-changeMainScene (DefineCard i) _ = Just (pickColorScene i)
-changeMainScene _ _ = Nothing
+changeMainScene :: MainAction -> World -> Maybe Scene
+changeMainScene (DefineCard colors i) _ = Just (pickColorScene colors i)
+changeMainScene _ world = do
+    winner <- checkWinner world
+    Just undefined                            
 
-inputMainScene :: Event -> World -> Action
-inputMainScene event world = do
+inputMainScene :: Event -> World -> Maybe MainAction
+inputMainScene event world = 
     case event of
-        MouseEvent e -> case e of 
-            MouseButtonClicked cursor _ -> do
-                    let clickCard = listToMaybe 
-                                    $ catMaybes 
-                                    $ zipWith (\i rc -> if isInCard cursor rc then Just i else Nothing) 
-                                    [0..4] (zip (repeat 8) [0,7..])
-                    case clickCard of
-                        Nothing -> NoAction
-                        Just i -> case fst $ chooseCard i (currentPlayer world) of
-                                    (Move _ _ _) -> PlayCard i
-                                    _          -> DefineCard i
-            _ -> NoAction
-        _ -> NoAction                     
+        KeyEvent e _ -> case e of 
+            CharKey '1' -> play 0
+            CharKey '2' -> play 1
+            CharKey '3' -> play 2
+            CharKey '4' -> play 3
+            CharKey '5' -> play 4
+            _ -> Nothing
+        _ -> Nothing     
+    where play i = case fst $ chooseCard i (currentPlayer world) of
+                            (Move _ _ _) -> Just $ PlayCard i
+                            (Last _)     -> Just $ DefineCard (turtlesInLastPlace world) i
+                            (Any _ _)    -> Just $ DefineCard (defaultTurtleColors) i
 
-updateMainScene :: Action -> World -> IO World
+updateMainScene :: MainAction -> World -> IO World
 updateMainScene action world = do
     case action of
         PlayCard i -> do
@@ -155,37 +173,43 @@ updateMainScene action world = do
 
 drawMainScene :: World -> TerminalT IO ()
 drawMainScene world = do
-    hideCursor
     clearScreen
-    drawSquare 0 10 (11, 5) Black
-    drawBoard 5 11 (world^.board)
-    drawPlayer 7 0 (currentPlayer world)
-    drawCards 8 0 (currentPlayer world ^. cards)
+    drawSquare 0 0 (11, 6) Black
+    drawBoard 6 1 (world^.board)
+    drawPlayer 8 0 (currentPlayer world)
+    drawCards 9 0 (currentPlayer world ^. cards)
 
 quit :: Event -> Bool
 quit InterruptEvent = True
 quit _ = False
 
-loop :: Scene a -> World -> TerminalT IO ()
-loop scene@(Scene draw input change update) world = do
+start :: Scene -> World -> TerminalT IO ()
+start scene@(Scene draw _ _ _) world = do
+    hideCursor
+    clearScreen
     draw world
-    flush
+    loop scene world
+
+loop :: Scene -> World -> TerminalT IO ()
+loop scene@(Scene draw input change update) world = do
     event <- waitEvent
-    let action = input event world
-        changedScene = change action world
-    world' <- lift $ update action world
     if quit event 
         then resetAnnotations 
-        else case changedScene of
-                    Nothing -> loop scene world'
-                    Just scene' -> loop scene' world'
+        else case input event world of
+                Nothing -> loop scene world
+                Just action -> do
+                    world' <- lift $ update action world
+                    clearScreen
+                    case change action world of
+                            Nothing -> draw world' >> loop scene world'
+                            Just scene'@(Scene draw' _ _ _) -> draw' world' >> loop scene' world'
 
 main :: IO ()
 main = do
     let nPlayers = 3  
     world <- newDefaultWorld nPlayers
     withTerminal $ \terminal -> 
-        runTerminalT (loop mainScene world) terminal
+        runTerminalT (start mainScene world) terminal
 
 
         

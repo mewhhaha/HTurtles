@@ -61,7 +61,7 @@ currentPlayer :: World -> Player
 currentPlayer = head . (^.turns)
 
 defaultTurtleColors :: [BasicColor]
-defaultTurtleColors = [Red, Green, Blue, Magenta, Cyan]         
+defaultTurtleColors = [Red, Green, Blue, Magenta, Cyan, Yellow]         
 
 defaultDeck :: Deck
 defaultDeck = concatMap colorCards defaultTurtleColors

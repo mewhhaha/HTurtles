@@ -79,13 +79,14 @@ drawContent row column (width, height) steps text = do
 drawSquare :: Int -> Int -> (Int, Int) -> BasicColor -> TerminalT IO ()
 drawSquare row column size@(width, _) color = do
         setCursorPosition (row, column)
-        let backgroundColor = background $ dull color
-            drawColoredBlank = setAnnotation backgroundColor >> putChar ' ' >> resetAnnotation backgroundColor
+        let setBackground =if color == Black then resetAnnotations else setAnnotation (background $ dull color)
+            drawColoredBlank = setBackground >> putChar ' ' >> resetAnnotations
             drawRow = \line -> do
                 mapM_ (\c -> if c == ' ' then drawColoredBlank else putChar c) line
                 moveCursorLeft (width + 2)
                 moveCursorDown 1
         mapM_ drawRow (cardMatrix size)
+
 
 drawPlayer :: Int -> Int -> Player -> TerminalT IO ()
 drawPlayer row column player = do

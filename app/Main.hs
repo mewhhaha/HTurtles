@@ -77,14 +77,13 @@ playCard (Move direction steps color) w = moveTurtle (fromEnum steps * fromEnum 
 playCard _ _ = undefined
 
 checkWinner :: World -> Maybe Player
-checkWinner world = do
-    winner <- maybeWinner
-    listToMaybe $ filter (\p -> p^.color == winner) allPlayers
+checkWinner world = listToMaybe $ mapMaybe matchingPlayer $ sortBy (compare `on` turtleElevation) turtlesOnEnd
  where end = snd $ world^.board.size
        allPlayers = take (world^.players) (world^.turns)
        turtleElevation = (^.elevation) . snd
        turtlesOnEnd = Map.toList $ Map.filter ((==) end . (^.position)) (world^.board.path)
-       maybeWinner = listToMaybe $ map fst $ sortBy (compare `on` turtleElevation) turtlesOnEnd
+       matchingPlayer t = listToMaybe $ mapMaybe (\p -> if p^.color == fst t then Just p else Nothing) allPlayers
+       
 
 turtlesInLastPlace :: World -> [BasicColor]
 turtlesInLastPlace world = Map.keys $ Map.filter ((== lastPosition) . _position) currentPath
@@ -94,7 +93,7 @@ turtlesInLastPlace world = Map.keys $ Map.filter ((== lastPosition) . _position)
 winnerScene :: Player -> Scene
 winnerScene player = Scene {
     input = \_ _ -> Nothing,
-    draw = \_ -> clearScreen >> putString (show player),
+    draw = \_ -> clearScreen >> drawPlayer 0 0 player,
     update = \_ -> return . id,
     change = \_ _ -> Nothing
 }
@@ -111,10 +110,15 @@ inputPickColorScene :: [BasicColor] -> Event -> p -> Maybe PickColorAction
 inputPickColorScene colors event world = 
     case event of
         KeyEvent e _ -> case e of 
-            CharKey c -> if isDigit c then color (digitToInt c) else Nothing
+            CharKey '1' -> color 0
+            CharKey '2' -> color 1
+            CharKey '3' -> color 2
+            CharKey '4' -> color 3
+            CharKey '5' -> color 4
+            CharKey '6' -> color 5
             _ -> Nothing
         _ -> Nothing     
-    where color i = PickColor <$> (listToMaybe $ fst $ splitAt i colors)
+    where color i = PickColor <$> (listToMaybe $ snd $ splitAt i colors)
 
 changePickColorScene :: p -> p1 -> Maybe Scene
 changePickColorScene _ _ = Just mainScene
@@ -157,7 +161,7 @@ changeMainScene :: MainAction -> World -> Maybe Scene
 changeMainScene (DefineCard colors i) _ = Just (pickColorScene colors i)
 changeMainScene _ world = do
     winner <- checkWinner world
-    Just undefined                            
+    Just (winnerScene winner)
 
 inputMainScene :: Event -> World -> Maybe MainAction
 inputMainScene event world = 
@@ -213,7 +217,7 @@ loop scene@(Scene draw input change update) world = do
                 Just action -> do
                     world' <- lift $ update action world
                     clearScreen
-                    case change action world of
+                    case change action world' of
                             Nothing -> draw world' >> loop scene world'
                             Just scene'@(Scene draw' _ _ _) -> draw' world' >> loop scene' world'
 

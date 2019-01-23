@@ -16,7 +16,6 @@ import Data.Function
 import System.Terminal
 import Control.Monad.Terminal
 import Control.Monad.Trans.Class
-import Data.Char
 
 data MainAction = PlayCard Int | DefineCard [BasicColor] Int | NoAction
     deriving Show
@@ -77,7 +76,7 @@ playCard (Move direction steps color) w = moveTurtle (fromEnum steps * fromEnum 
 playCard _ _ = undefined
 
 checkWinner :: World -> Maybe Player
-checkWinner world = listToMaybe $ mapMaybe matchingPlayer $ sortBy (compare `on` turtleElevation) turtlesOnEnd
+checkWinner world = listToMaybe $ mapMaybe matchingPlayer $ sortBy (flip compare `on` turtleElevation) turtlesOnEnd
  where end = snd $ world^.board.size
        allPlayers = take (world^.players) (world^.turns)
        turtleElevation = (^.elevation) . snd
@@ -223,7 +222,7 @@ loop scene@(Scene draw input change update) world = do
 
 main :: IO ()
 main = do
-    let nPlayers = 3  
+    let nPlayers = 4  
     world <- newDefaultWorld nPlayers
     withTerminal $ \terminal -> 
         runTerminalT (start mainScene world) terminal

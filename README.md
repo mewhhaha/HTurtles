@@ -6,6 +6,7 @@ This is a Haskell implementation of the board game Turtles in the terminal.
 
 ## Rules
 There are 6 Turtles  
+Game is hardcoded for 4 players   
 Every player gets 6 cards  
 Player are assigned random turtle colors  
 Players play one card every turn to move a turtle, and then get one card from the deck  
